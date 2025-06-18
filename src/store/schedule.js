@@ -90,9 +90,9 @@ export const useScheduleStore = defineStore('schedule', {
     },
     
     // Загрузка предстоящих событий
-    async fetchUpcomingEvents(limit = 5) {
+    async fetchUpcomingEvents() {
       try {
-        const response = await scheduleService.getUpcomingEvents(limit);
+        const response = await scheduleService.getUpcomingEvents();
         
         // Добавляем события в общий список, если их там еще нет
         if (response.data && Array.isArray(response.data.events)) {

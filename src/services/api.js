@@ -2,8 +2,8 @@ import axios from 'axios';
 
 // Указываем прямой URL бэкенда, чтобы избежать перенаправлений
 // Важно: если URL использует proxy в Vue.config.js, убедитесь что настройки совпадают
-// const API_URL = 'http://localhost:5000/api';
-const API_URL = 'https://onlyytomskiy.pythonanywhere.com/api';
+const API_URL = 'http://localhost:5000/api';
+// const API_URL = 'https://onlyytomskiy.pythonanywhere.com/api';
 
 // Создаем экземпляр axios с базовым URL
 const apiClient = axios.create({
@@ -76,7 +76,7 @@ export const authService = {
 // API сервисы для работы с расписанием
 export const scheduleService = {
   getSchedule: (params) => apiClient.get('/schedule/', { params }),
-  getUpcomingEvents: (limit = 5) => apiClient.get('/schedule/', { params: { upcoming: true, limit } }),
+  getUpcomingEvents: (limit = 5) => apiClient.get('/schedule/'),
   getEventById: (id) => apiClient.get(`/schedule/${id}/`),
   createEvent: (eventData) => apiClient.post('/schedule/', eventData),
   updateEvent: (id, eventData) => apiClient.put(`/schedule/${id}/`, eventData),
@@ -156,6 +156,14 @@ export const analyticsService = {
     params: { ...params, format },
     responseType: 'blob',
   }),
+};
+
+// API сервисы для работы с пользователями
+export const userService = {
+  getUsers: (params) => apiClient.get('/users/', { params }),
+  getUserById: (id) => apiClient.get(`/users/${id}/`),
+  updateUser: (id, userData) => apiClient.put(`/users/${id}/`, userData),
+  deleteUser: (id) => apiClient.delete(`/users/${id}/`),
 };
 
 // Примечание: Если маршрут /notifications/ не реализован в бэкенде, то можно использовать /messages/ или другой маршрут

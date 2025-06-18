@@ -36,7 +36,7 @@
         </ion-card-header>
         <ion-card-content>
           <ion-list lines="none" v-if="upcomingEvents.length > 0">
-            <ion-item v-for="event in upcomingEvents" :key="event.id">
+            <ion-item v-for="event in upcomingEvents.slice(0, 3)" :key="event.id">
               <ion-icon :icon="calendarOutline" slot="start" color="primary"></ion-icon>
               <ion-label>
                 <h3>{{ event.title }}</h3>
@@ -153,7 +153,7 @@ const isAdmin = computed(() => authStore.isAdmin);
 
 // Используем данные из хранилища вместо локальных переменных
 const upcomingEvents = computed(() => {
-  return scheduleStore.upcomingEvents || [];
+  return scheduleStore.upcomingEvents ? scheduleStore.upcomingEvents(5) : [];
 });
 
 // Вычисляемые свойства для отображения задач
@@ -214,7 +214,7 @@ onMounted(async () => {
       
       // Загрузка событий расписания через хранилище Pinia
       try {
-        await scheduleStore.fetchUpcomingEvents(3);
+        await scheduleStore.fetchUpcomingEvents();
       } catch (e) {
         console.error('Failed to load upcoming events:', e);
       }
@@ -224,6 +224,10 @@ onMounted(async () => {
       
       // Загрузка активных и отложенных задач через хранилище Pinia
       try {
+        // Загрузка ближайших событий расписания
+        await scheduleStore.fetchUpcomingEvents();
+        console.log('События загружены в хранилище:', scheduleStore.upcomingEvents());
+        
         // Запрашиваем задачи со всеми статусами, на стороне клиента отфильтруем нужные
         await taskStore.fetchTasks({ limit: 10 });
         console.log('Задачи загружены в хранилище:', taskStore.tasks);
@@ -277,7 +281,7 @@ const refreshData = async (event) => {
     
     // Обновление данных с сервера через хранилища Pinia с интервалами между запросами
     try {
-      await scheduleStore.fetchUpcomingEvents(3);
+      await scheduleStore.fetchUpcomingEvents();
     } catch (e) {
       console.error('Failed to refresh events:', e);
     }

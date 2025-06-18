@@ -168,19 +168,19 @@ import { useAuthStore } from '@/store/auth';
 
 const router = useRouter();
 const authStore = useAuthStore();
-
+const user = computed(() => authStore.user);
 // Мок-данные для демонстрации
-const user = ref({
-  id: 1,
-  firstName: 'Иван',
-  lastName: 'Петров',
-  email: 'petrov@school.ru',
-  role: 'teacher',
-  position: 'Учитель математики',
-  department: 'Кафедра математики',
-  phone: '+7 (900) 123-45-67',
-  lastActive: new Date(new Date().getTime() - 1800000) // 30 минут назад
-});
+// const user = ref({
+//   id: 1,
+//   firstName: 'Иван',
+//   lastName: 'Петров',
+//   email: 'petrov@school.ru',
+//   role: 'teacher',
+//   position: 'Учитель математики',
+//   department: 'Кафедра математики',
+//   phone: '+7 (900) 123-45-67',
+//   lastActive: new Date(new Date().getTime() - 1800000) // 30 минут назад
+// });
 
 const settings = ref({
   notifications: true,
@@ -352,7 +352,14 @@ onMounted(async () => {
     // В реальном приложении здесь будет загрузка данных пользователя с сервера
     // const userData = await authStore.fetchCurrentUser();
     // user.value = userData;
-    
+    if (!authStore.user) {
+        const user = await authStore.fetchCurrentUser();
+        if (!user) {
+          console.error('Failed to get user data');
+          router.push('/login');
+          return;
+        }
+      }
     // Загрузка настроек из локального хранилища
     const savedSettings = localStorage.getItem('userSettings');
     if (savedSettings) {

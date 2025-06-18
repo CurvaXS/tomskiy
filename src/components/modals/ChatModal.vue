@@ -82,7 +82,7 @@ import {
   toastController
 } from '@ionic/vue';
 import { closeOutline } from 'ionicons/icons';
-import { chatService } from '@/services/api';
+import { chatService, userService } from '@/services/api';
 import { useAuthStore } from '@/store/auth';
 
 const emit = defineEmits(['dismiss', 'chatCreated']);
@@ -111,17 +111,48 @@ const isValid = computed(() => {
 
 onMounted(async () => {
   try {
-    // В реальном приложении здесь будет загрузка списка пользователей
-    // Для теста используем моки
+    loading.value = true;
+    error.value = null;
+    
+    // Загружаем реальных пользователей с сервера через API
+    const response = await userService.getUsers();
+    console.log('Loaded users:', response.data);
+    
+    // Парсим полученные данные в нужный формат
+    const userData = response.data.users || response.data;
+    
+    if (!userData || !Array.isArray(userData)) {
+      console.error('Неверный формат данных пользователей:', response.data);
+      error.value = 'Не удалось загрузить список пользователей';
+      return;
+    }
+    
+    // Преобразуем данные пользователей в нужный формат
+    users.value = userData.map(user => ({
+      id: user.id,
+      firstName: user.first_name || user.firstName || '',
+      lastName: user.last_name || user.lastName || '',
+      email: user.email || ''
+    }));
+    
+    // Исключаем из списка текущего пользователя
+    const currentUserId = authStore.user?.id;
+    if (currentUserId) {
+      users.value = users.value.filter(user => user.id !== currentUserId);
+    }
+    
+    console.log('Processed users for chat:', users.value);
+  } catch (err) {
+    console.error('Ошибка загрузки пользователей:', err);
+    error.value = 'Не удалось загрузить список пользователей';
+    // Предоставляем тестовых пользователей, если не удалось загрузить
     users.value = [
       { id: 1, firstName: 'Иван', lastName: 'Иванов' },
       { id: 2, firstName: 'Петр', lastName: 'Петров' },
-      { id: 3, firstName: 'Анна', lastName: 'Сидорова' },
-      { id: 4, firstName: 'Екатерина', lastName: 'Смирнова' },
-      { id: 5, firstName: 'Михаил', lastName: 'Кузнецов' }
+      { id: 3, firstName: 'Анна', lastName: 'Сидорова' }
     ];
-  } catch (err) {
-    console.error('Ошибка загрузки пользователей:', err);
+  } finally {
+    loading.value = false;
   }
 });
 

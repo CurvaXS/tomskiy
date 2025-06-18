@@ -24,7 +24,26 @@
       <div v-if="!activeChat">
         <ion-searchbar placeholder="Поиск чатов" v-model="searchQuery" @ionInput="searchChats"></ion-searchbar>
         
-        <ion-list lines="full">
+        <div v-if="loading" class="loading-container">
+          <ion-spinner name="crescent"></ion-spinner>
+          <p>Загрузка чатов...</p>
+        </div>
+        
+        <div v-else-if="error" class="error-container">
+          <ion-icon :icon="alertCircleOutline" color="danger" size="large"></ion-icon>
+          <p>{{ error }}</p>
+          <ion-button size="small" @click="loadChats">Повторить</ion-button>
+        </div>
+        
+        <ion-list v-else-if="filteredChats.length === 0" class="chat-list empty-list">
+          <div class="empty-state">
+            <ion-icon :icon="chatboxOutline" size="large"></ion-icon>
+            <p>У вас пока нет чатов</p>
+            <ion-button size="small" @click="openNewChatModal">Создать чат</ion-button>
+          </div>
+        </ion-list>
+        
+        <ion-list v-else class="chat-list">
           <ion-item button v-for="chat in filteredChats" :key="chat.id" @click="selectChat(chat)" class="chat-item">
             <div class="chat-avatar" slot="start" :style="{ backgroundColor: getAvatarColor(chat.id) }">
               {{ getInitials(chat.name) }}
@@ -115,7 +134,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
 import { 
   IonPage, 
   IonHeader, 
@@ -159,86 +178,102 @@ const activeChat = ref(null);
 const newMessage = ref('');
 const messagesContainer = ref(null);
 const isTyping = ref(false);
+const loading = ref(false);
+const loadingMessages = ref(false);
+const error = ref(null);
 
-// Список чатов - загружается с сервера
-const chats = ref([]);
+// Настройки поллинга для реалтайм-обновлений
+const pollingEnabled = ref(true);
+const pollingInterval = 10000; // 10 секунд по умолчанию
+const chatPollingIntervalId = ref(null);
+const messagePollingIntervalId = ref(null);
+const lastMessageTimestamp = ref(null);
 
-const messages = ref([
-  // Сообщения для чата 1
-  {
-    id: 1,
-    chatId: 1,
-    content: 'Коллеги, добрый день! Напоминаю, что у нас совещание в среду в 15:00.',
-    senderId: 2,
-    senderName: 'Смирнова О.П.',
-    timestamp: new Date(new Date().getTime() - 7200000), // 2 часа назад
-    read: true
-  },
-  {
-    id: 2,
-    chatId: 1,
-    content: 'Спасибо за напоминание! Буду обязательно.',
-    senderId: 3,
-    senderName: 'Иванов К.Н.',
-    timestamp: new Date(new Date().getTime() - 3600000), // 1 час назад
-    read: true
-  },
-  {
-    id: 3,
-    chatId: 1,
-    content: 'Коллеги, не забудьте принести отчеты по контрольным работам.',
-    senderId: 2,
-    senderName: 'Смирнова О.П.',
-    timestamp: new Date(new Date().getTime() - 1800000), // 30 минут назад
-    read: false
-  },
-  
-  // Сообщения для чата 2
-  {
-    id: 4,
-    chatId: 2,
-    content: 'Здравствуйте! Подскажите, пожалуйста, расписание на завтра.',
-    senderId: 2,
-    senderName: 'Петров И.С.',
-    timestamp: new Date(new Date().getTime() - 90000), // 1.5 минуты назад
-    read: true
-  },
-  {
-    id: 5,
-    chatId: 2,
-    content: 'Добрый день! У вас первый урок в 9:00, кабинет 305.',
-    senderId: currentUserId.value,
-    senderName: 'Вы',
-    timestamp: new Date(new Date().getTime() - 60000), // 1 минута назад
-    read: true
-  },
-  
-  // Сообщения для чата 3
-  {
-    id: 6,
-    chatId: 3,
-    content: 'Уважаемые коллеги! Напоминаем о сдаче квартальных отчетов до пятницы.',
-    senderId: 5,
-    senderName: 'Директор',
-    timestamp: new Date(new Date().getTime() - 259200000), // 3 дня назад
-    read: true,
-    attachment: {
-      id: 1,
-      name: 'Шаблон отчета.docx',
-      type: 'docx',
-      url: '/files/report-template.docx'
-    }
-  },
-  {
-    id: 7,
-    chatId: 3,
-    content: 'Также не забудьте внести данные по успеваемости в систему.',
-    senderId: 5,
-    senderName: 'Директор',
-    timestamp: new Date(new Date().getTime() - 172800000), // 2 дня назад
-    read: false
+// Функции для поллинга сообщений - реализация ниже
+
+const stopMessagePolling = () => {
+  if (messagePollingIntervalId.value) {
+    console.log('Остановка поллинга сообщений');
+    clearInterval(messagePollingIntervalId.value);
+    messagePollingIntervalId.value = null;
   }
-]);
+};
+
+// Функции для поллинга списка чатов
+const startChatListPolling = () => {
+  if (!pollingEnabled.value || chatPollingIntervalId.value) return;
+  
+  console.log('Запуск поллинга списка чатов');
+  
+  // Функция для загрузки чатов
+  const fetchChats = async () => {
+    try {
+      const response = await chatService.getChats();
+      console.log('Response from chat server:', response.data);
+      
+      // Получаем список чатов из ответа
+      const chatsList = response.data.chats || response.data;
+      
+      if (!chatsList || !Array.isArray(chatsList)) {
+        console.error('Неожиданный формат ответа API:', response.data);
+        return;
+      }
+      
+      // Проверяем на новые чаты или обновления в существующих
+      chatsList.forEach(serverChat => {
+        // Находим чат в нашем списке
+        const existingChatIndex = chats.value.findIndex(c => c.id === serverChat.id);
+        
+        // Преобразуем данные в формат нашего компонента
+        const formattedChat = {
+          id: serverChat.id,
+          name: serverChat.name || 'Чат без названия',
+          type: serverChat.type || 'private',
+          participants: serverChat.members?.map(m => m.user_id || m.userId || m.id) || [],
+          lastMessage: serverChat.last_message?.content || serverChat.lastMessage?.text || '',
+          lastMessageTime: serverChat.last_message?.timestamp || serverChat.lastMessage?.timestamp ? 
+            new Date(serverChat.last_message?.timestamp || serverChat.lastMessage?.timestamp) : new Date(),
+          unreadCount: serverChat.unread_count || serverChat.unreadCount || 0,
+          createdAt: serverChat.created_at || serverChat.createdAt ? 
+            new Date(serverChat.created_at || serverChat.createdAt) : new Date()
+        };
+        
+        // Если чат существует, обновляем его, иначе добавляем новый
+        if (existingChatIndex !== -1) {
+          // Обновляем только если есть изменения
+          if (formattedChat.lastMessageTime > chats.value[existingChatIndex].lastMessageTime || 
+              formattedChat.unreadCount !== chats.value[existingChatIndex].unreadCount) {
+            chats.value[existingChatIndex] = formattedChat;
+          }
+        } else {
+          // Добавляем новый чат
+          chats.value.push(formattedChat);
+        }
+      });
+      
+      // Сортируем чаты по времени последнего сообщения
+      chats.value.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+      
+    } catch (err) {
+      console.error('Ошибка при поллинге списка чатов:', err);
+    }
+  };
+  
+  // Устанавливаем интервал для регулярной проверки списка чатов
+  chatPollingIntervalId.value = setInterval(fetchChats, pollingInterval);
+};
+
+const stopChatListPolling = () => {
+  if (chatPollingIntervalId.value) {
+    console.log('Остановка поллинга списка чатов');
+    clearInterval(chatPollingIntervalId.value);
+    chatPollingIntervalId.value = null;
+  }
+};
+
+// Список чатов и сообщений - загружается с сервера
+const chats = ref([]);
+const messages = ref([]);
 
 // Расчетные свойства
 const filteredChats = computed(() => {
@@ -295,13 +330,91 @@ const groupedMessages = computed(() => {
 });
 
 // Обработчики событий
-const selectChat = (chat) => {
-  activeChat.value = chat;
-  // Сбрасываем счетчик непрочитанных сообщений
-  chat.unreadCount = 0;
-  
-  // В реальном приложении здесь будет загрузка сообщений с сервера
-  // chatService.getMessages(chat.id);
+const selectChat = async (chat) => {
+  try {
+    // Останавливаем предыдущий поллинг сообщений
+    stopMessagePolling();
+    
+    activeChat.value = chat;
+    messages.value = [];
+    loadingMessages.value = true;
+    error.value = null;
+    lastMessageTimestamp.value = null;
+    
+    // Загрузка всех доступных сообщений с учетом пагинации
+    let currentPage = 1;
+    let totalPages = 1;
+    let allMessages = [];
+    
+    do {
+      const response = await chatService.getMessages(chat.id, { page: currentPage, per_page: 50 });
+      console.log(`Loading messages page ${currentPage}:`, response.data);
+      
+      const messagesList = response.data.messages || response.data;
+      if (!messagesList || !Array.isArray(messagesList)) {
+        console.error('Неожиданный формат ответа API для сообщений:', response.data);
+        break;
+      }
+      
+      allMessages = [...allMessages, ...messagesList];
+      
+      // Проверяем информацию о пагинации
+      if (response.data.pages) {
+        totalPages = response.data.pages;
+      } else {
+        // Если информация о пагинации отсутствует, значит у нас только одна страница
+        break;
+      }
+      
+      currentPage++;
+    } while (currentPage <= totalPages);
+    
+    if (allMessages.length === 0) {
+      console.log('No messages found for this chat');
+      return;
+    }
+    
+    // Преобразуем данные сообщений в формат нашего компонента
+    messages.value = allMessages.map(msg => ({
+      id: msg.id,
+      chatId: chat.id,
+      content: msg.text || msg.content,
+      senderId: msg.sender?.id || msg.sender_id || msg.user_id || msg.senderId,
+      senderName: msg.sender_name || msg.senderName || 
+                 (msg.sender ? `${msg.sender.first_name || ''} ${msg.sender.last_name || ''}`.trim() : ''),
+      timestamp: msg.timestamp || msg.created_at || msg.createdAt ? new Date(msg.timestamp || msg.created_at || msg.createdAt) : new Date(),
+      read: msg.is_read || msg.isRead || false,
+      attachment: msg.attachment_id || msg.attachmentId ? {
+        id: msg.attachment_id || msg.attachmentId,
+        name: msg.attachment?.name || msg.attachment?.file_name || 'Прикрепленный файл',
+        type: msg.attachment?.type || msg.attachment?.file_type || 'file',
+        url: msg.attachment?.url || `/api/documents/${msg.attachment_id || msg.attachmentId}/download/`
+      } : null
+    }));
+    
+    // Сортируем сообщения по времени (старые сверху)
+    messages.value.sort((a, b) => a.timestamp - b.timestamp);
+    
+    // Устанавливаем временную метку последнего сообщения для будущего поллинга
+    if (messages.value.length > 0) {
+      const lastMsg = messages.value[messages.value.length - 1];
+      lastMessageTimestamp.value = lastMsg.timestamp;
+    }
+    
+    // Сбрасываем счетчик непрочитанных сообщений
+    chat.unreadCount = 0;
+    
+    console.log('Processed messages:', messages.value);
+
+    // Запускаем поллинг для новых сообщений
+    startMessagePolling(chat.id);
+  } catch (error) {
+    console.error('Ошибка при загрузке сообщений:', error);
+    showToast('Не удалось загрузить сообщения', 'danger');
+    error.value = 'Ошибка загрузки сообщений';
+  } finally {
+    loadingMessages.value = false;
+  }
   
   // Прокручиваем к последнему сообщению после загрузки
   nextTick(() => {
@@ -309,85 +422,264 @@ const selectChat = (chat) => {
   });
 };
 
+
+// Функция для начала опроса новых сообщений
+const startMessagePolling = (chatId) => {
+  // Остановить предыдущий интервал
+  stopMessagePolling();
+  
+  if (!pollingEnabled.value || !chatId) return;
+  
+  messagePollingIntervalId.value = setInterval(async () => {
+    try {
+      // Проверяем, что у нас всё ещё тот же активный чат
+      if (!activeChat.value || activeChat.value.id !== chatId) {
+        stopMessagePolling();
+        return;
+      }
+      
+      // Проверяем наличие временной метки последнего сообщения
+      if (!lastMessageTimestamp.value) return;
+      
+      // Форматируем дату для запроса
+      const fromTimestamp = new Date(lastMessageTimestamp.value.getTime() + 1);
+      
+      // Получаем только новые сообщения после последней известной отметки времени
+      const response = await chatService.getMessages(chatId, { 
+        from_timestamp: fromTimestamp.toISOString() 
+      });
+      
+      const newMessagesList = response.data.messages || response.data;
+      
+      if (!newMessagesList || !Array.isArray(newMessagesList) || newMessagesList.length === 0) {
+        return;
+      }
+      
+      // Обрабатываем новые сообщения
+      const newMsgs = newMessagesList.map(msg => ({
+        id: msg.id,
+        chatId: chatId,
+        content: msg.text || msg.content,
+        senderId: msg.sender?.id || msg.sender_id || msg.user_id || msg.senderId,
+        senderName: msg.sender_name || msg.senderName || (msg.user_id === currentUserId.value ? 'Вы' : 'Собеседник'),
+        timestamp: msg.timestamp || msg.created_at || msg.createdAt ? 
+                  new Date(msg.timestamp || msg.created_at || msg.createdAt) : new Date(),
+        read: msg.is_read || msg.isRead || false
+      }));
+      
+      // Расширенная проверка дубликатов
+      // Проверяем не только ID, но и контент + отправителя + время
+      const uniqueNewMsgs = newMsgs.filter(newMsg => {
+        // Проверка по ID - не добавляем сообщения с существующим ID
+        if (messages.value.some(msg => msg.id === newMsg.id)) {
+          return false;
+        }
+        
+        // Проверка по другим полям - чтобы избежать дубликатов, если есть одинаковые по содержанию и времени
+        return !messages.value.some(msg => 
+          msg.content === newMsg.content && 
+          msg.senderId === newMsg.senderId &&
+          Math.abs(msg.timestamp - newMsg.timestamp) < 1000 // Разница во времени менее 1 секунды
+        );
+      });
+      
+      if (uniqueNewMsgs.length === 0) return;
+      
+      // Добавляем новые сообщения в конец списка
+      messages.value = [...messages.value, ...uniqueNewMsgs];
+      
+      // Обновляем временную метку последнего полученного сообщения
+      const lastMessage = messages.value[messages.value.length - 1];
+      lastMessageTimestamp.value = lastMessage.timestamp;
+      
+      // Обновляем данные последнего сообщения в списке чатов
+      if (uniqueNewMsgs.length > 0 && lastMessage.senderId !== currentUserId.value) {
+        const chat = chats.value.find(c => c.id === chatId);
+        if (chat) {
+          chat.lastMessage = lastMessage.content;
+          chat.lastMessageTime = lastMessage.timestamp;
+          chat.unreadCount = (chat.unreadCount || 0) + uniqueNewMsgs.length;
+        }
+      }
+      
+      // Прокручиваем к последнему сообщению, если пользователь уже находился внизу
+      const container = messagesContainer.value;
+      if (container && container.scrollHeight - container.scrollTop <= container.clientHeight + 100) {
+        nextTick(() => {
+          scrollToBottom();
+        });
+      }
+    } catch (error) {
+      console.error('Ошибка при обновлении сообщений:', error);
+      // Не показываем ошибку пользователю при неудачном поллинге
+    }
+  }, pollingInterval);
+};
+
 const closeActiveChat = () => {
+  // Останавливаем поллинг сообщений при закрытии чата
+  stopMessagePolling();
   activeChat.value = null;
 };
 
-const sendMessage = () => {
+const sendMessage = async () => {
   if (!newMessage.value.trim()) return;
   
-  // Создаем новое сообщение
-  const newMsg = {
-    id: messages.value.length + 1,
-    chatId: activeChat.value.id,
-    content: newMessage.value.trim(),
-    senderId: currentUserId.value,
-    senderName: 'Вы',
-    timestamp: new Date(),
-    read: false
-  };
+  const messageContent = newMessage.value.trim();
   
-  // Добавляем сообщение в список
-  messages.value.push(newMsg);
-  
-  // Обновляем данные чата
-  const chat = chats.value.find(c => c.id === activeChat.value.id);
-  if (chat) {
-    chat.lastMessage = newMsg.content;
-    chat.lastMessageTime = newMsg.timestamp;
-  }
-  
-  // Очищаем поле ввода
+  // Очищаем поле ввода сразу, чтобы пользователь мог продолжить печатать
   newMessage.value = '';
   
-  // Прокручиваем к новому сообщению
-  nextTick(() => {
-    scrollToBottom();
-  });
-  
-  // В реальном приложении здесь будет отправка сообщения на сервер
-  // chatService.sendMessage(activeChat.value.id, newMsg.content);
+  try {
+    // Создаем оптимистичное временное сообщение для UI
+    const tempMsg = {
+      id: `temp-${Date.now()}`,
+      chatId: activeChat.value.id,
+      content: messageContent,
+      senderId: currentUserId.value,
+      senderName: 'Вы',
+      timestamp: new Date(),
+      read: false,
+      sending: true // флаг для отображения статуса отправки
+    };
+    
+    // Добавляем временное сообщение в список
+    messages.value.push(tempMsg);
+    
+    // Обновляем данные чата в списке
+    const chat = chats.value.find(c => c.id === activeChat.value.id);
+    if (chat) {
+      chat.lastMessage = messageContent;
+      chat.lastMessageTime = tempMsg.timestamp;
+    }
+    
+    // Обновляем временную метку последнего сообщения для поллинга
+    // Это предотвратит дублирование, так как поллинг будет искать сообщения после этой временной метки
+    lastMessageTimestamp.value = tempMsg.timestamp;
+    
+    // Прокручиваем к новому сообщению
+    nextTick(() => {
+      scrollToBottom();
+    });
+    
+    // Отправляем сообщение на сервер
+    const response = await chatService.sendMessage(activeChat.value.id, { text: messageContent });
+    console.log('Message sent response:', response.data);
+    
+    // Получаем данные о сохраненном сообщении с сервера
+    const serverMsg = response.data.message || response.data;
+    
+    if (!serverMsg) {
+      throw new Error('Неожиданный формат ответа при отправке сообщения');
+    }
+    
+    // Удаляем временное сообщение и заменяем его на реальное с сервера
+    const tempIndex = messages.value.findIndex(msg => msg.id === tempMsg.id);
+    if (tempIndex !== -1) {
+      // Заменяем временное сообщение на реальное
+      const realMsg = {
+        id: serverMsg.id,
+        chatId: activeChat.value.id,
+        content: serverMsg.text || serverMsg.content || messageContent,
+        senderId: serverMsg.user_id || serverMsg.sender_id || serverMsg.senderId || currentUserId.value,
+        senderName: 'Вы',
+        timestamp: serverMsg.timestamp || serverMsg.created_at || serverMsg.createdAt ? 
+                  new Date(serverMsg.timestamp || serverMsg.created_at || serverMsg.createdAt) : new Date(),
+        read: serverMsg.is_read || serverMsg.isRead || false
+      };
+      
+      // Заменяем временное сообщение
+      messages.value.splice(tempIndex, 1, realMsg);
+      
+      // Обновляем временную метку последнего сообщения после получения ответа от сервера
+      lastMessageTimestamp.value = realMsg.timestamp;
+    }
+    
+  } catch (error) {
+    console.error('Ошибка при отправке сообщения:', error);
+    showToast('Ошибка при отправке сообщения', 'danger');
+    
+    // Помечаем сообщение как не отправленное
+    const tempIndex = messages.value.findIndex(msg => msg.sending && msg.content === messageContent);
+    if (tempIndex !== -1) {
+      messages.value[tempIndex].sending = false;
+      messages.value[tempIndex].error = true;
+    }
+  }
 };
 
 // Загрузка чатов с сервера
 const loadChats = async () => {
   try {
-    const response = await chatService.getChats();
-    console.log('Response from server:', response.data);
+    loading.value = true;
+    error.value = null;
     
-    // Проверяем, что в ответе есть свойство chats
-    if (!response.data || !response.data.chats) {
+    const response = await chatService.getChats();
+    console.log('Response from chat server:', response.data);
+    
+    // Проверяем формат ответа - в зависимости от формата API
+    const chatsList = response.data.chats || response.data;
+    
+    if (!chatsList || !Array.isArray(chatsList)) {
       console.error('Неожиданный формат ответа API:', response.data);
+      error.value = 'Неверный формат данных от сервера';
       return;
     }
     
     // Преобразуем данные чатов с сервера в формат нашего компонента
-    chats.value = response.data.chats.map(chat => {
+    chats.value = chatsList.map(chat => {
+      // Определяем имя чата в зависимости от типа
       let chatName = chat.name;
-      // Для личного чата устанавливаем имя собеседника
-      if (chat.type === 'private' && !chatName) {
-        // Находим участника, который не является текущим пользователем
-        const otherMember = chat.members?.find(m => m.id !== currentUserId.value);
-        chatName = otherMember ? otherMember.name : 'Личный чат';
+      const chatType = chat.type?.value || chat.type;
+      
+      if (chatType === 'private' && !chatName) {
+        // Для личного чата находим имя собеседника
+        const otherMember = chat.members?.find(m => {
+          const memberId = m.user_id || m.userId || m.id;
+          return memberId !== currentUserId.value;
+        });
+        
+        if (otherMember) {
+          const firstName = otherMember.user?.first_name || otherMember.first_name || '';
+          const lastName = otherMember.user?.last_name || otherMember.last_name || '';
+          chatName = `${firstName} ${lastName}`.trim() || 'Личный чат';
+        } else {
+          chatName = 'Личный чат';
+        }
       } else if (!chatName) {
         // Для группового чата без названия
         chatName = 'Групповой чат';
       }
       
+      // Определяем последнее сообщение
+      const lastMsg = chat.last_message || chat.lastMessage;
+      const lastMsgContent = lastMsg?.text || lastMsg?.content || '';
+      const lastMsgTime = lastMsg?.timestamp || lastMsg?.created_at || lastMsg?.createdAt;
+      const unreadCount = chat.unread_count || chat.unreadCount || 0;
+      
+      // Участники чата
+      const members = chat.members || [];
+      const participants = members.map(m => m.user_id || m.userId || m.id);
+      
       return {
         id: chat.id,
         name: chatName,
-        type: chat.type,
-        participants: chat.members?.map(m => m.id) || [],
-        lastMessage: chat.lastMessage?.content || '',
-        lastMessageTime: chat.lastMessage?.createdAt ? new Date(chat.lastMessage.createdAt) : null,
-        unreadCount: chat.unreadCount || 0,
-        createdAt: chat.createdAt ? new Date(chat.createdAt) : new Date()
+        type: chatType,
+        participants: participants,
+        lastMessage: lastMsgContent,
+        lastMessageTime: lastMsgTime ? new Date(lastMsgTime) : null,
+        unreadCount: unreadCount,
+        createdAt: chat.created_at || chat.createdAt ? new Date(chat.created_at || chat.createdAt) : new Date()
       };
     });
+    
+    console.log('Processed chats:', chats.value);
   } catch (error) {
     console.error('Ошибка при загрузке чатов:', error);
+    error.value = 'Ошибка при загрузке чатов';
     showToast('Ошибка при загрузке чатов', 'danger');
+  } finally {
+    loading.value = false;
   }
 };
 
@@ -397,34 +689,72 @@ const openNewChatModal = async () => {
   });
   
   modal.onDidDismiss().then(async ({ data }) => {
-    if (data) {
-      // Добавляем новый чат в список, предварительно преобразовав его в нужный формат
-      let chatName = data.name;
-      
-      // Определяем имя чата в зависимости от типа
-      if (data.type === 'private' && !chatName) {
-        // Для личного чата пытаемся найти имя собеседника
-        const otherMember = data.members?.find(m => m.id !== currentUserId.value);
-        chatName = otherMember ? otherMember.name : 'Личный чат';
-      } else if (!chatName) {
-        // Если это групповой чат без имени
-        chatName = 'Групповой чат';
+    if (data && (data.chat || data.id)) {
+      try {
+        console.log('Получены данные о новом чате:', data);
+        
+        const chatData = data.chat || data;
+        
+        if (!chatData.id) {
+          console.error('Отсутствует ID чата в полученных данных');
+          return;
+        }
+        
+        // Запрашиваем полную информацию о чате с сервера
+        const response = await chatService.getChat(chatData.id);
+        const fullChatData = response.data.chat || response.data;
+        
+        // Обрабатываем данные чата для отображения
+        const chatType = fullChatData.type?.value || fullChatData.type;
+        let chatName = fullChatData.name;
+        
+        // Для личного чата пробуем определить имя собеседника
+        if (chatType === 'private' && !chatName) {
+          const otherMember = fullChatData.members?.find(m => {
+            return m.id !== currentUserId.value;
+          });
+          
+          if (otherMember) {
+            // The API gives us the full name directly in the 'name' property
+            chatName = otherMember.name || 'Личный чат';
+            console.log('Set private chat name to:', chatName, 'from member:', otherMember);
+          } else {
+            chatName = 'Личный чат';
+            console.log('Could not find other member, using default name');
+          }
+        } else if (!chatName) {
+          chatName = 'Групповой чат';
+        }
+        
+        // Определяем последнее сообщение
+        const lastMsg = fullChatData.last_message || fullChatData.lastMessage || {};
+        const lastMsgContent = lastMsg.text || lastMsg.content || '';
+        const lastMsgTime = lastMsg.timestamp || lastMsg.created_at || lastMsg.createdAt || fullChatData.created_at || fullChatData.createdAt;
+        
+        // Создаем объект чата для отображения
+        const newChat = {
+          id: fullChatData.id,
+          name: chatName,
+          type: chatType,
+          participants: fullChatData.members?.map(m => m.user_id || m.userId || m.id) || [],
+          lastMessage: lastMsgContent,
+          lastMessageTime: lastMsgTime ? new Date(lastMsgTime) : new Date(),
+          unreadCount: fullChatData.unread_count || fullChatData.unreadCount || 0,
+          createdAt: fullChatData.created_at || fullChatData.createdAt ? new Date(fullChatData.created_at || fullChatData.createdAt) : new Date()
+        };
+        
+        // Добавляем новый чат в начало списка
+        chats.value.unshift(newChat);
+        
+        // Автоматически выбираем новый чат
+        selectChat(newChat);
+        showToast('Чат успешно создан!', 'success');
+      } catch (error) {
+        console.error('Ошибка при обработке нового чата:', error);
+        showToast('Ошибка при создании чата', 'danger');
+        // Перезагружаем все чаты при ошибке
+        loadChats();
       }
-      
-      const newChat = {
-        id: data.id,
-        name: chatName,
-        type: data.type,
-        participants: data.members?.map(m => m.id) || [],
-        lastMessage: '',
-        lastMessageTime: data.createdAt ? new Date(data.createdAt) : new Date(),
-        unreadCount: 0,
-        createdAt: data.createdAt ? new Date(data.createdAt) : new Date()
-      };
-      
-      chats.value.unshift(newChat);
-      // Показываем сообщение об успехе
-      showToast('Чат успешно создан', 'success');
     }
   });
   
@@ -482,9 +812,18 @@ onMounted(async () => {
   // Загружаем чаты при монтировании компонента
   await loadChats();
   
+  // Запускаем поллинг для списка чатов
+  startChatListPolling();
+  
   if (messagesContainer.value) {
     scrollToBottom();
   }
+});
+
+// Останавливаем все поллинги при размонтировании компонента
+onUnmounted(() => {
+  stopChatListPolling();
+  stopMessagePolling();
 });
 
 // ...
@@ -569,22 +908,6 @@ const getEmptyStateText = () => {
     return 'У вас пока нет открытых чатов';
   }
 };
-
-// Загрузка данных при монтировании компонента
-onMounted(async () => {
-  try {
-    // В реальном приложении здесь будет загрузка данных с сервера
-    // const response = await chatService.getChats();
-    // chats.value = response.data;
-    
-    // Скроллим к последнему сообщению
-    nextTick(() => {
-      scrollToBottom();
-    });
-  } catch (error) {
-    console.error('Failed to load chat data:', error);
-  }
-});
 
 // Вспомогательная функция для отображения сообщений
 const showToast = async (message, color = 'primary') => {
