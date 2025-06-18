@@ -2,8 +2,8 @@ import axios from 'axios';
 
 // Указываем прямой URL бэкенда, чтобы избежать перенаправлений
 // Важно: если URL использует proxy в Vue.config.js, убедитесь что настройки совпадают
-const API_URL = 'http://localhost:5000/api';
-// const API_URL = 'https://onlyytomskiy.pythonanywhere.com/api';
+// const API_URL = 'http://localhost:5000/api';
+const API_URL = 'https://onlyytomskiy.pythonanywhere.com/api';
 
 // Создаем экземпляр axios с базовым URL
 const apiClient = axios.create({
